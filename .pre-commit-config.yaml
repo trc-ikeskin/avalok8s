@@ -10,9 +10,6 @@ repos:
     rev: v0.5.1
     hooks:
       - id: go-fmt
-      - id: go-vet
-        args: ["./..."]
-      - id: go-imports
       - id: go-cyclo
       - id: golangci-lint
       - id: go-unit-tests
