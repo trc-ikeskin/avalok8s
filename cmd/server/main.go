@@ -191,11 +191,19 @@ func main() {
 
 	// Create Gin router
 	router := gin.Default()
+	err := router.SetTrustedProxies(nil)
+	if err != nil {
+		log.Fatal("Error setting trusted proxies: ", err)
+	}
+
 	router.GET("/nodes", GetNodes)
 	router.GET("/pods", GetPods)
 	router.GET("/events", StreamEvents)
 
 	// Start server
 	fmt.Println("Starting to serve API...")
-	router.Run()
+	err = router.Run()
+	if err != nil {
+		log.Fatal("Error starting server: ", err)
+	}
 }
