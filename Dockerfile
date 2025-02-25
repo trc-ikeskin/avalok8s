@@ -20,12 +20,14 @@ RUN go build ./...
 
 FROM alpine:latest
 
+ENV PORT=8080
+
 WORKDIR /app/
 
 RUN apk add --no-cache ca-certificates
 
 COPY --from=builder /src/server .
 
-EXPOSE 8080
+EXPOSE ${PORT}
 
 ENTRYPOINT ["./server"]
