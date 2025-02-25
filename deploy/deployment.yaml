@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/instance: avalok8s
+    app.kubernetes.io/name: avalok8s
+  name: avalok8s
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  namespace: avalok8s
+  name: avalok8s
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: avalok8s
+rules:
+  - apiGroups: [""]
+    resources:
+      - nodes
+      - pods
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: avalok8s
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: avalok8s
+subjects:
+  - kind: ServiceAccount
+    namespace: avalok8s
+    name: avalok8s
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: avalok8s
+  namespace: avalok8s
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: avalok8s
+  template:
+    metadata:
+      labels:
+        app: avalok8s
+    spec:
+      serviceAccountName: avalok8s
+      containers:
+        - name: avalok8s
+          image: avalok8s
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "250m"
+            limits:
+              memory: "128Mi"
+              cpu: "500m"
+          ports:
+            - containerPort: 8080
