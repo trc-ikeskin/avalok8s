@@ -196,6 +196,6 @@ func main() {
 	router.GET("/events", StreamEvents)
 
 	// Start server
-	fmt.Println("Start serving API...")
+	fmt.Println("Starting to serve API...")
 	router.Run()
 }
