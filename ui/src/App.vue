@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import { useEventSource } from '@vueuse/core'
 
 import Node from '@/components/Node.vue'
@@ -26,7 +26,10 @@ onMounted(() => {
 
       nodes.value = clusterData.nodes.map((node: any) => ({
         name: node.name,
-        pods: node.pods || [],
+        pods: node.pods.map((pod: any) => ({
+          name: pod.name,
+          status: pod.status || 'unknown', // Ensure status exists
+        })),
       }))
     } catch (error) {
       console.error('Error parsing SSE data:', error)
