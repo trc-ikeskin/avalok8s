@@ -7,11 +7,15 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"reflect"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -29,7 +33,7 @@ var cacheMutex sync.RWMutex
 
 // Cluster cache
 type ClusterState struct {
-	Nodes map[string]NodeInfo `json:"nodes"`
+	Nodes []NodeInfo `json:"nodes"`
 }
 
 type NodeInfo struct {
@@ -70,20 +74,21 @@ func init() {
 }
 
 // Fetch and update cluster state
-func updateClusterState() {
+func getClusterState() []NodeInfo {
 	log.Println("Fetching Kubernetes cluster state...")
 
-	newState := ClusterState{Nodes: make(map[string]NodeInfo)}
+	var nodesList []NodeInfo
+	nodesMap := make(map[string]NodeInfo)
 
 	// Fetch nodes
 	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		log.Printf("Error fetching nodes: %v", err)
-		return
+		return nil
 	}
 
 	for _, node := range nodes.Items {
-		newState.Nodes[node.Name] = NodeInfo{
+		nodesMap[node.Name] = NodeInfo{
 			Name: node.Name,
 			Pods: []PodInfo{},
 		}
@@ -93,7 +98,7 @@ func updateClusterState() {
 	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		log.Printf("Error fetching pods: %v", err)
-		return
+		return nil
 	}
 
 	for _, pod := range pods.Items {
@@ -104,40 +109,57 @@ func updateClusterState() {
 			Node:      pod.Spec.NodeName,
 		}
 
-		// Assign pod to corresponding node
-		if node, exists := newState.Nodes[pod.Spec.NodeName]; exists {
+		// Assign pod to the corresponding node
+		if node, exists := nodesMap[pod.Spec.NodeName]; exists {
 			node.Pods = append(node.Pods, podInfo)
-			newState.Nodes[pod.Spec.NodeName] = node
+			nodesMap[pod.Spec.NodeName] = node
 		}
 	}
 
-	// Convert both the new and old cache to JSON for comparison
-	newStateJSON, _ := json.Marshal(newState)
-	cacheMutex.RLock()
-	oldStateJSON, _ := json.Marshal(clusterCache)
-	cacheMutex.RUnlock()
+	// Convert the map to a slice
+	for _, node := range nodesMap {
+		nodesList = append(nodesList, node)
+	}
 
-	// If the state hasn't changed, return without sending an event
-	if string(newStateJSON) == string(oldStateJSON) {
-		log.Println("No changes in cluster state. Skipping update!")
+	// Sort by node names
+	sort.Slice(nodesList, func(i, j int) bool {
+		return nodesList[i].Name < nodesList[j].Name
+	})
+
+	log.Println("Cluster state fetched successfully.")
+	return nodesList
+}
+
+func refreshClusterCacheAndNotify() {
+	newNodes := getClusterState()
+	if newNodes == nil {
 		return
 	}
 
-	// Update cache with minimal locking
-	newClusterCache := newState
-	cacheMutex.Lock()
-	clusterCache = newClusterCache
-	cacheMutex.Unlock()
-	log.Println("Cluster state cache updated.")
+	// Acquire read lock to compare with current cache
+	cacheMutex.RLock()
+	isSameState := reflect.DeepEqual(clusterCache.Nodes, newNodes)
+	cacheMutex.RUnlock()
 
-	// Notify consumers via event channel
+	if isSameState {
+		log.Println("No changes detected in cluster state. Skipping cache update.")
+		return
+	}
+
+	// Update cache only if a real change is detected
+	cacheMutex.Lock()
+	clusterCache.Nodes = newNodes
+	cacheMutex.Unlock()
+
+	// Notify SSE stream about the update
 	data, _ := json.Marshal(clusterCache)
 	message := fmt.Sprintf("event: %s\ndata: %s\n\n", "updated", string(data))
+
 	select {
 	case clusterStateEventChannel <- message:
 		log.Println("Cluster state updated and sent to stream.")
 	default:
-		log.Println("Event channel is full, skipping update.")
+		log.Println("Event channel is full, skipping update notification.")
 	}
 }
 
@@ -184,7 +206,7 @@ func main() {
 	}()
 
 	// Fetch initial cluster state
-	updateClusterState()
+	refreshClusterCacheAndNotify()
 
 	// Schedule updates
 	log.Printf("Scheduling queries every %d seconds...", int(serverConfig.QueryInterval.Seconds()))
@@ -196,13 +218,15 @@ func main() {
 				ticker.Stop()
 				return
 			case <-ticker.C:
-				updateClusterState()
+				refreshClusterCacheAndNotify()
 			}
 		}
 	}()
 
 	// Create Gin router
 	router := gin.Default()
+	router.Use(cors.Default())
+
 	err := router.SetTrustedProxies(nil)
 	if err != nil {
 		log.Fatal("Error setting trusted proxies: ", err)
