@@ -7,7 +7,7 @@ import (
 )
 
 type Config struct {
-	QueryInterval time.Duration `env:"QUERY_INTERVAL" envDefault:"5"`
+	QueryInterval time.Duration `env:"QUERY_INTERVAL" envDefault:"5s"`
 }
 
 func NewConfig() (Config, error) {
