@@ -3,6 +3,7 @@ module github.com/trc-ikeskin/avalok8s
 go 1.24.0
 
 require (
+	github.com/caarlos0/env/v11 v11.3.1
 	github.com/gin-gonic/gin v1.10.0
 	k8s.io/apimachinery v0.32.2
 	k8s.io/client-go v0.32.2

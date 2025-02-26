@@ -15,7 +15,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	envConfig "github.com/trc-ikeskin/avalok8s/internal/config"
 )
+
+var serverConfig envConfig.Config
 
 // Kubernetes client
 var clientset *kubernetes.Clientset
@@ -47,14 +51,19 @@ var clusterCache ClusterState
 var clusterStateEventChannel = make(chan string, 10)
 
 func init() {
-	// creates the in-cluster config
+	// creates the Kubernetes in-cluster config
 	config, err := rest.InClusterConfig()
 	if err != nil {
 		panic(err.Error())
 	}
 
-	// creates the clientset
+	// creates the Kubernetes ClientSet
 	clientset, err = kubernetes.NewForConfig(config)
+	if err != nil {
+		panic(err.Error())
+	}
+
+	serverConfig, err = envConfig.NewConfig()
 	if err != nil {
 		panic(err.Error())
 	}
@@ -177,8 +186,9 @@ func main() {
 	// Fetch initial cluster state
 	updateClusterState()
 
-	// Schedule updates every 10 seconds
-	ticker := *time.NewTicker(10 * time.Second)
+	// Schedule updates
+	log.Printf("Scheduling queries every %d seconds...", serverConfig.QueryInterval)
+	ticker := *time.NewTicker(serverConfig.QueryInterval * time.Second)
 	go func() {
 		for {
 			select {
