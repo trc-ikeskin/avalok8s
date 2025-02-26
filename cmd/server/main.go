@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/gin-contrib/cors"
+	"github.com/gin-contrib/static"
 	"github.com/gin-gonic/gin"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -226,6 +227,7 @@ func main() {
 	// Create Gin router
 	router := gin.Default()
 	router.Use(cors.Default())
+	router.Use(static.Serve("/", static.LocalFile("./ui/dist", false)))
 
 	err := router.SetTrustedProxies(nil)
 	if err != nil {
