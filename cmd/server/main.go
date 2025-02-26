@@ -187,7 +187,7 @@ func main() {
 	updateClusterState()
 
 	// Schedule updates
-	log.Printf("Scheduling queries every %d seconds...", serverConfig.QueryInterval)
+	log.Printf("Scheduling queries every %d seconds...", int(serverConfig.QueryInterval.Seconds()))
 	ticker := *time.NewTicker(serverConfig.QueryInterval)
 	go func() {
 		for {
