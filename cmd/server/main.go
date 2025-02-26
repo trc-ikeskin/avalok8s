@@ -188,7 +188,7 @@ func main() {
 
 	// Schedule updates
 	log.Printf("Scheduling queries every %d seconds...", serverConfig.QueryInterval)
-	ticker := *time.NewTicker(serverConfig.QueryInterval * time.Second)
+	ticker := *time.NewTicker(serverConfig.QueryInterval)
 	go func() {
 		for {
 			select {
