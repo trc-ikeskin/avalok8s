@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -13,10 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-
-	apiv1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -24,15 +20,31 @@ import (
 // Kubernetes client
 var clientset *kubernetes.Clientset
 
-// SSE event channel
-var eventChannel = make(chan string)
-
-// Mutex to handle cache concurrency
+// Mutex for cache concurrency
 var cacheMutex sync.RWMutex
 
-// Cached data
-var nodesCache []gin.H
-var podsCache []gin.H
+// Cluster cache
+type ClusterState struct {
+	Nodes map[string]NodeInfo `json:"nodes"`
+}
+
+type NodeInfo struct {
+	Name string    `json:"name"`
+	Pods []PodInfo `json:"pods"`
+}
+
+type PodInfo struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Status    string `json:"status"`
+	Node      string `json:"node"`
+}
+
+// Cached cluster state
+var clusterCache ClusterState
+
+// Create event channel for cluster state changes
+var clusterStateEventChannel = make(chan string, 10)
 
 func init() {
 	// creates the in-cluster config
@@ -48,59 +60,23 @@ func init() {
 	}
 }
 
-// Watches Kubernetes nodes and pods for changes
-func startKubernetesWatcher(ctx context.Context) {
-	log.Println("Starting Kubernetes watch...")
+// Fetch and update cluster state
+func updateClusterState() {
+	log.Println("Fetching Kubernetes cluster state...")
 
-	// Watch Nodes
-	go watchResource(ctx, "nodes", clientset.CoreV1().Nodes().Watch)
-
-	// Watch Pods
-	go watchResource(ctx, "pods", clientset.CoreV1().Pods("").Watch)
-}
-
-// Generic function to watch a Kubernetes resource
-func watchResource(ctx context.Context, resource string, watchFunc func(context.Context, metav1.ListOptions) (watch.Interface, error)) {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Printf("Stopping watch for %s...", resource)
-			return
-		default:
-			watcher, err := watchFunc(ctx, metav1.ListOptions{})
-			if err != nil {
-				log.Printf("Error watching %s: %v", resource, err)
-				time.Sleep(5 * time.Second)
-				continue
-			}
-
-			for event := range watcher.ResultChan() {
-				data, _ := json.Marshal(event.Object)
-				message := fmt.Sprintf("event: %s\ndata: %s\n\n", event.Type, string(data))
-				eventChannel <- message
-				updateData()
-			}
-		}
-	}
-}
-
-// Fetches Kubernetes nodes and pods, updating the cache
-func updateData() {
-	log.Println("Updating Kubernetes data...")
-
-	newNodes := []gin.H{}
-	newPods := []gin.H{}
+	newState := ClusterState{Nodes: make(map[string]NodeInfo)}
 
 	// Fetch nodes
 	nodes, err := clientset.CoreV1().Nodes().List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		log.Printf("Error fetching nodes: %v", err)
-	} else {
-		for _, node := range nodes.Items {
-			newNodes = append(newNodes, gin.H{
-				"name":   node.Name,
-				"status": getNodeStatus(node),
-			})
+		return
+	}
+
+	for _, node := range nodes.Items {
+		newState.Nodes[node.Name] = NodeInfo{
+			Name: node.Name,
+			Pods: []PodInfo{},
 		}
 	}
 
@@ -108,69 +84,81 @@ func updateData() {
 	pods, err := clientset.CoreV1().Pods("").List(context.TODO(), metav1.ListOptions{})
 	if err != nil {
 		log.Printf("Error fetching pods: %v", err)
-	} else {
-		for _, pod := range pods.Items {
-			newPods = append(newPods, gin.H{
-				"namespace": pod.Namespace,
-				"name":      pod.Name,
-				"status":    string(pod.Status.Phase),
-			})
+		return
+	}
+
+	for _, pod := range pods.Items {
+		podInfo := PodInfo{
+			Name:      pod.Name,
+			Namespace: pod.Namespace,
+			Status:    string(pod.Status.Phase),
+			Node:      pod.Spec.NodeName,
+		}
+
+		// Assign pod to corresponding node
+		if node, exists := newState.Nodes[pod.Spec.NodeName]; exists {
+			node.Pods = append(node.Pods, podInfo)
+			newState.Nodes[pod.Spec.NodeName] = node
 		}
 	}
 
-	// Update cache
+	// Convert both the new and old cache to JSON for comparison
+	newStateJSON, _ := json.Marshal(newState)
+	cacheMutex.RLock()
+	oldStateJSON, _ := json.Marshal(clusterCache)
+	cacheMutex.RUnlock()
+
+	// If the state hasn't changed, return without sending an event
+	if string(newStateJSON) == string(oldStateJSON) {
+		log.Println("No changes in cluster state. Skipping update!")
+		return
+	}
+
+	// Update cache with minimal locking
+	newClusterCache := newState
 	cacheMutex.Lock()
-	nodesCache = newNodes
-	podsCache = newPods
+	clusterCache = newClusterCache
 	cacheMutex.Unlock()
+	log.Println("Cluster state cache updated.")
 
-	log.Println("Kubernetes data updated.")
-}
-
-// Get latest nodes
-func GetNodes(c *gin.Context) {
-	cacheMutex.RLock()
-	defer cacheMutex.RUnlock()
-	c.JSON(http.StatusOK, gin.H{"nodes": nodesCache})
-}
-
-// Get latest pods
-func GetPods(c *gin.Context) {
-	cacheMutex.RLock()
-	defer cacheMutex.RUnlock()
-	c.JSON(http.StatusOK, gin.H{"pods": podsCache})
+	// Notify consumers via event channel
+	data, _ := json.Marshal(clusterCache)
+	message := fmt.Sprintf("event: %s\ndata: %s\n\n", "updated", string(data))
+	select {
+	case clusterStateEventChannel <- message:
+		log.Println("Cluster state updated and sent to stream.")
+	default:
+		log.Println("Event channel is full, skipping update.")
+	}
 }
 
 // SSE Streaming Events
-func StreamEvents(c *gin.Context) {
+func StreamClusterState(c *gin.Context) {
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
 	c.Writer.Header().Set("Connection", "keep-alive")
 
+	// Immediately send last known cluster state to new clients
+	cacheMutex.RLock()
+	initialState, _ := json.Marshal(clusterCache)
+	cacheMutex.RUnlock()
+	fmt.Fprintf(c.Writer, "event: updated\ndata: %s\n\n", string(initialState))
+	c.Writer.Flush()
+
 	for {
 		select {
-		case message := <-eventChannel:
+		case message := <-clusterStateEventChannel:
 			_, err := c.Writer.Write([]byte(message))
 			if err != nil {
-				log.Println("Client disconnected from SSE")
+				log.Printf("There was an error: %v", err)
 				return
 			}
 			c.Writer.Flush()
 		case <-c.Request.Context().Done():
-			log.Println("SSE client disconnected")
+			log.Println("SSE client has disconnected")
 			return
 		}
 	}
-}
-
-// Extracts "Ready" status from a node
-func getNodeStatus(node apiv1.Node) string {
-	for _, condition := range node.Status.Conditions {
-		if condition.Type == "Ready" && condition.Status == "True" {
-			return "Ready"
-		}
-	}
-	return "NotReady"
 }
 
 func main() {
@@ -186,8 +174,22 @@ func main() {
 		cancel()
 	}()
 
-	// Start Kubernetes watcher
-	go startKubernetesWatcher(ctx)
+	// Fetch initial cluster state
+	updateClusterState()
+
+	// Schedule updates every 10 seconds
+	ticker := *time.NewTicker(10 * time.Second)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				ticker.Stop()
+				return
+			case <-ticker.C:
+				updateClusterState()
+			}
+		}
+	}()
 
 	// Create Gin router
 	router := gin.Default()
@@ -196,9 +198,7 @@ func main() {
 		log.Fatal("Error setting trusted proxies: ", err)
 	}
 
-	router.GET("/nodes", GetNodes)
-	router.GET("/pods", GetPods)
-	router.GET("/events", StreamEvents)
+	router.GET("/state", StreamClusterState)
 
 	// Start server
 	fmt.Println("Starting to serve API...")
