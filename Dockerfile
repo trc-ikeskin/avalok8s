@@ -14,7 +14,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 
-RUN go build ./...
+RUN go build -o ./bin/ ./...
 
 ####### run stage ########
 
@@ -26,7 +26,7 @@ WORKDIR /app/
 
 RUN apk add --no-cache ca-certificates
 
-COPY --from=builder /src/server .
+COPY --from=builder /src/bin/server .
 
 EXPOSE ${PORT}
 
