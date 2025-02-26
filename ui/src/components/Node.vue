@@ -54,6 +54,8 @@ const getPodClass = (status: string) => {
   text-align: center;
   border-radius: 4px;
   font-size: 1.2em;
+  background-color: var(--dark-blue);
+  color: var(--off-white);
 }
 
 .node-body {
@@ -80,18 +82,18 @@ const getPodClass = (status: string) => {
 
 /* Dynamic pod colors */
 .pod-running {
-  background-color: #28a745;
-} /* Green */
+  background-color: var(--green);
+}
 .pod-pending {
-  background-color: #ffc107;
-} /* Yellow */
+  background-color: var(--yellow);
+}
 .pod-failed {
-  background-color: #dc3545;
-} /* Red */
+  background-color: var(--red);
+}
 .pod-succeeded {
-  background-color: #17a2b8;
-} /* Teal */
+  background-color: var(--blue);
+}
 .pod-unknown {
-  background-color: #6c757d;
-} /* Gray */
+  background-color: lightgrey;
+}
 </style>
